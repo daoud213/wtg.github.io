@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Watch Together</title>
+    <style>
+        body { text-align: center; font-family: Arial, sans-serif; padding: 20px; }
+        input, button { margin: 10px; padding: 10px; width: 80%; }
+        iframe { margin-top: 20px; width: 80%; height: 400px; }
+    </style>
+</head>
+<body>
+    <h1>Watch Together</h1>
+    <input type="text" id="videoUrl" placeholder="Enter video URL..." />
+    <button onclick="playVideo()">Play Video</button>
+    <div id="videoContainer"></div>
+
+    <script>
+        function playVideo() {
+            let url = document.getElementById('videoUrl').value;
+            let container = document.getElementById('videoContainer');
+            container.innerHTML = `<iframe src="${url}" frameborder="0" allowfullscreen></iframe>`;
+        }
+    </script>
+</body>
+</html>
