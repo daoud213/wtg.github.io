@@ -12,7 +12,7 @@
 </head>
 <body>
     <h1>Watch Together</h1>
-    <input type="text" id="videoUrl" placeholder="Enter video URL..." />
+    <input type="text" id="videoUrl" placeholder="Enter YouTube URL..." />
     <button onclick="playVideo()">Play Video</button>
     <div id="videoContainer"></div>
 
@@ -20,7 +20,16 @@
         function playVideo() {
             let url = document.getElementById('videoUrl').value;
             let container = document.getElementById('videoContainer');
-            container.innerHTML = `<iframe src="${url}" frameborder="0" allowfullscreen></iframe>`;
+
+            // Convert YouTube link to embeddable format
+            let videoId = url.split("v=")[1]?.split("&")[0]; 
+            if (videoId) {
+                container.innerHTML = `<iframe width="560" height="315" 
+                    src="https://www.youtube.com/embed/${videoId}" 
+                    frameborder="0" allowfullscreen></iframe>`;
+            } else {
+                container.innerHTML = "<p>Invalid YouTube link.</p>";
+            }
         }
     </script>
 </body>
