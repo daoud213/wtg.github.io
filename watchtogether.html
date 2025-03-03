@@ -1,0 +1,497 @@
+// pages/index.js - Home Page
+import { useState } from 'react';
+import { useRouter } from 'next/router';
+import Head from 'next/head';
+
+export default function Home() {
+  const router = useRouter();
+  const [roomName, setRoomName] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
+  const [username, setUsername] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const createRoom = async (e) => {
+    e.preventDefault();
+    
+    if (!roomName || !username) {
+      setError('Room name and username are required');
+      return;
+    }
+    
+    setLoading(true);
+    
+    try {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/rooms`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ name: roomName, isPrivate })
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        // Save username in localStorage
+        localStorage.setItem('username', username);
+        
+        // Redirect to the room
+        router.push(`/room/${data.roomId}`);
+      } else {
+        setError(data.message || 'Failed to create room');
+      }
+    } catch (err) {
+      setError('Server error. Please try again.');
+      console.error(err);
+    }
+    
+    setLoading(false);
+  };
+
+  const joinRoom = (e) => {
+    e.preventDefault();
+    
+    if (!username) {
+      setError('Username is required');
+      return;
+    }
+    
+    // Save username in localStorage
+    localStorage.setItem('username', username);
+    
+    // Go to join room page
+    router.push('/join');
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
+      <Head>
+        <title>Watch Together</title>
+        <meta name="description" content="Watch videos together with friends in real-time" />
+      </Head>
+      
+      <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-md">
+        <h1 className="text-3xl font-bold text-center mb-6">Watch Together</h1>
+        
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+        
+        <form onSubmit={createRoom} className="space-y-4">
+          <div>
+            <label className="block text-gray-700 mb-1">Your Name</label>
+            <input
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className="w-full p-2 border rounded"
+              placeholder="Enter your name"
+            />
+          </div>
+          
+          <div>
+            <label className="block text-gray-700 mb-1">Room Name</label>
+            <input
+              type="text"
+              value={roomName}
+              onChange={(e) => setRoomName(e.target.value)}
+              className="w-full p-2 border rounded"
+              placeholder="Enter room name"
+            />
+          </div>
+          
+          <div className="flex items-center">
+            <input
+              type="checkbox"
+              id="private"
+              checked={isPrivate}
+              onChange={(e) => setIsPrivate(e.target.checked)}
+              className="mr-2"
+            />
+            <label htmlFor="private" className="text-gray-700">
+              Make room private
+            </label>
+          </div>
+          
+          <div className="flex space-x-4">
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-1/2 bg-blue-600 text-white p-2 rounded hover:bg-blue-700"
+            >
+              {loading ? 'Creating...' : 'Create Room'}
+            </button>
+            
+            <button
+              onClick={joinRoom}
+              disabled={loading}
+              className="w-1/2 bg-gray-200 text-gray-800 p-2 rounded hover:bg-gray-300"
+            >
+              Join Room
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// pages/room/[roomId].js - Watch Room Page
+import { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/router';
+import Head from 'next/head';
+import io from 'socket.io-client';
+import YouTube from 'react-youtube';
+
+export default function Room() {
+  const router = useRouter();
+  const { roomId } = router.query;
+  const [socket, setSocket] = useState(null);
+  const [room, setRoom] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [users, setUsers] = useState([]);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [videoUrl, setVideoUrl] = useState('');
+  const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [isHost, setIsHost] = useState(false);
+  
+  const playerRef = useRef(null);
+  const messagesEndRef = useRef(null);
+  
+  // Get YouTube video ID from URL
+  const getYouTubeId = (url) => {
+    const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+    const match = url.match(regExp);
+    return (match && match[2].length === 11) ? match[2] : null;
+  };
+  
+  // Connect to socket and fetch room details
+  useEffect(() => {
+    if (!roomId) return;
+    
+    const username = localStorage.getItem('username') || 'Guest';
+    
+    // Connect to Socket.IO server
+    const newSocket = io(process.env.NEXT_PUBLIC_SOCKET_URL);
+    setSocket(newSocket);
+    
+    // Fetch room details
+    const fetchRoom = async () => {
+      try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/rooms/${roomId}`);
+        const data = await res.json();
+        
+        if (data.success) {
+          setRoom(data.room);
+          setVideoUrl(data.room.videoUrl || '');
+        } else {
+          setError('Room not found');
+        }
+      } catch (err) {
+        setError('Failed to load room');
+        console.error(err);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    fetchRoom();
+    
+    // Join room when socket connects
+    newSocket.on('connect', () => {
+      newSocket.emit('join-room', { roomId, username });
+      
+      // First user becomes host
+      if (users.length === 0) {
+        setIsHost(true);
+      }
+    });
+    
+    // Handle socket events
+    newSocket.on('user-joined', ({ users: roomUsers }) => {
+      setUsers(roomUsers);
+    });
+    
+    newSocket.on('user-left', ({ users: roomUsers }) => {
+      setUsers(roomUsers);
+    });
+    
+    newSocket.on('new-message', (message) => {
+      setMessages((prev) => [...prev, message]);
+    });
+    
+    newSocket.on('sync-video-state', (videoState) => {
+      if (videoState.url) {
+        setVideoUrl(videoState.url);
+      }
+      
+      if (playerRef.current) {
+        const player = playerRef.current.getInternalPlayer();
+        
+        if (videoState.isPlaying) {
+          player.playVideo();
+        } else {
+          player.pauseVideo();
+        }
+        
+        if (Math.abs(player.getCurrentTime() - videoState.currentTime) > 2) {
+          player.seekTo(videoState.currentTime);
+        }
+      }
+    });
+    
+    newSocket.on('video-action', ({ action, value }) => {
+      if (!playerRef.current) return;
+      
+      const player = playerRef.current.getInternalPlayer();
+      
+      switch (action) {
+        case 'play':
+          player.playVideo();
+          break;
+        case 'pause':
+          player.pauseVideo();
+          break;
+        case 'seek':
+          player.seekTo(value);
+          break;
+        case 'change-video':
+          setVideoUrl(value);
+          break;
+      }
+    });
+    
+    return () => {
+      newSocket.disconnect();
+    };
+  }, [roomId]);
+  
+  // Auto-scroll chat to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+  
+  // Handle sending messages
+  const sendMessage = (e) => {
+    e.preventDefault();
+    if (!newMessage.trim() || !socket) return;
+    
+    const username = localStorage.getItem('username') || 'Guest';
+    
+    socket.emit('send-message', {
+      roomId,
+      message: newMessage,
+      username
+    });
+    
+    setNewMessage('');
+  };
+  
+  // Handle video player state changes
+  const onPlayerStateChange = (event) => {
+    if (!socket || !isHost) return;
+    
+    switch (event.data) {
+      case YouTube.PlayerState.PLAYING:
+        socket.emit('video-action', { roomId, action: 'play' });
+        break;
+      case YouTube.PlayerState.PAUSED:
+        socket.emit('video-action', { roomId, action: 'pause' });
+        break;
+    }
+  };
+  
+  // Handle video seek
+  const onPlayerSeek = () => {
+    if (!socket || !isHost || !playerRef.current) return;
+    
+    const currentTime = playerRef.current.getInternalPlayer().getCurrentTime();
+    socket.emit('video-action', { roomId, action: 'seek', value: currentTime });
+  };
+  
+  // Change video
+  const changeVideo = (e) => {
+    e.preventDefault();
+    if (!newVideoUrl.trim() || !socket) return;
+    
+    const videoId = getYouTubeId(newVideoUrl);
+    
+    if (videoId) {
+      socket.emit('video-action', {
+        roomId,
+        action: 'change-video',
+        value: videoId
+      });
+      
+      setNewVideoUrl('');
+    } else {
+      alert('Invalid YouTube URL');
+    }
+  };
+  
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+  }
+  
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-red-500 mb-4">{error}</p>
+          <button
+            onClick={() => router.push('/')}
+            className="bg-blue-600 text-white px-4 py-2 rounded"
+          >
+            Back to Home
+          </button>
+        </div>
+      </div>
+    );
+  }
+  
+  const youtubeOpts = {
+    height: '480',
+    width: '100%',
+    playerVars: {
+      autoplay: 0,
+      controls: isHost ? 1 : 0, // Only host can control
+      disablekb: !isHost ? 1 : 0 // Disable keyboard controls for non-hosts
+    }
+  };
+  
+  return (
+    <div className="min-h-screen bg-gray-100">
+      <Head>
+        <title>{room?.name || 'Watch Room'} | Watch Together</title>
+      </Head>
+      
+      <div className="container mx-auto p-4">
+        <div className="bg-white rounded-lg shadow-md p-4 mb-4">
+          <h1 className="text-2xl font-bold mb-2">{room?.name}</h1>
+          <div className="flex items-center mb-2">
+            <div className="mr-2 text-gray-600">Room ID:</div>
+            <div className="flex-1 bg-gray-100 p-2 rounded">
+              {roomId}
+            </div>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(window.location.href);
+                alert('Room link copied to clipboard!');
+              }}
+              className="ml-2 bg-blue-600 text-white px-3 py-1 rounded text-sm"
+            >
+              Copy Link
+            </button>
+          </div>
+          
+          {isHost && (
+            <form onSubmit={changeVideo} className="flex mb-4">
+              <input
+                type="text"
+                value={newVideoUrl}
+                onChange={(e) => setNewVideoUrl(e.target.value)}
+                placeholder="Enter YouTube URL"
+                className="flex-1 p-2 border rounded-l"
+              />
+              <button
+                type="submit"
+                className="bg-blue-600 text-white px-4 py-2 rounded-r"
+              >
+                Change Video
+              </button>
+            </form>
+          )}
+          
+          {isHost ? (
+            <div className="text-green-600 mb-4">
+              You are the host. You control the video for everyone.
+            </div>
+          ) : (
+            <div className="text-gray-600 mb-4">
+              The host controls the video. Your controls are disabled.
+            </div>
+          )}
+        </div>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+          <div className="lg:col-span-3">
+            <div className="bg-black rounded-lg overflow-hidden">
+              {videoUrl ? (
+                <YouTube
+                  videoId={videoUrl}
+                  opts={youtubeOpts}
+                  onStateChange={onPlayerStateChange}
+                  onReady={(e) => {
+                    playerRef.current = e;
+                  }}
+                  onPause={onPlayerSeek}
+                  onPlay={onPlayerSeek}
+                  onEnd={onPlayerSeek}
+                />
+              ) : (
+                <div className="h-[480px] flex items-center justify-center text-white">
+                  {isHost ? 'Add a YouTube video to get started' : 'Waiting for host to add a video'}
+                </div>
+              )}
+            </div>
+          </div>
+          
+          <div className="lg:col-span-1">
+            <div className="bg-white rounded-lg shadow-md h-full flex flex-col">
+              <div className="p-3 border-b">
+                <h3 className="font-bold">Participants ({users.length})</h3>
+                <div className="mt-2 max-h-24 overflow-y-auto">
+                  {users.map((user) => (
+                    <div key={user.id} className="py-1">
+                      {user.username}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              <div className="flex-1 p-3 overflow-y-auto">
+                <h3 className="font-bold mb-2">Chat</h3>
+                <div className="h-64 overflow-y-auto mb-3">
+                  {messages.length === 0 ? (
+                    <div className="text-gray-500 text-center">
+                      No messages yet
+                    </div>
+                  ) : (
+                    messages.map((msg) => (
+                      <div key={msg.id} className="mb-2">
+                        <div className="font-bold">{msg.username}</div>
+                        <div>{msg.message}</div>
+                      </div>
+                    ))
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+                
+                <form onSubmit={sendMessage} className="flex">
+                  <input
+                    type="text"
+                    value={newMessage}
+                    onChange={(e) => setNewMessage(e.target.value)}
+                    placeholder="Type a message..."
+                    className="flex-1 p-2 border rounded-l"
+                  />
+                  <button
+                    type="submit"
+                    className="bg-blue-600 text-white px-3 py-2 rounded-r"
+                  >
+                    Send
+                  </button>
+                </form>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
